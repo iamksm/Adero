@@ -1,0 +1,11 @@
+-e .
+
+flake8
+black
+isort
+pre-commit
+pytest
+pytest-xdist
+pytest-cov
+tox
+coverage
