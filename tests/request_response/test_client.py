@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from messaging_utility.rpc.client import RPCClient, RPCClientException
+from adero.request_response.client import RPCClient, RPCClientException
 
 
 class TestRPCClient(unittest.TestCase):
@@ -17,7 +17,7 @@ class TestRPCClient(unittest.TestCase):
         self.queue_name = "test_queue"
         self.exchange = "test_exchange"
 
-    @patch("messaging_utility.rpc.client.pika")
+    @patch("adero.request_response.client.pika")
     def test_create_connection_to_rabbitmq_host(self, mock_pika):
         client = RPCClient(self.queue_name, self.exchange, self.config)
 
@@ -27,7 +27,7 @@ class TestRPCClient(unittest.TestCase):
 
         assert client.connection == mock_pika.BlockingConnection.return_value
 
-    @patch("messaging_utility.rpc.client.pika.BlockingConnection")
+    @patch("adero.request_response.client.pika.BlockingConnection")
     def test_init_consumer(self, mock_blocking_connection):
         client = RPCClient(self.queue_name, self.exchange, self.config)
         client.create_connection_to_rabbitmq_host()
@@ -55,7 +55,7 @@ class TestRPCClient(unittest.TestCase):
         client.on_response(Mock(), method, props, body)
         self.assertIsNone(client.response)
 
-    @patch("messaging_utility.rpc.client.pika.BlockingConnection")
+    @patch("adero.request_response.client.pika.BlockingConnection")
     def test_call(self, mock_blocking_connection):
         client = RPCClient(self.queue_name, self.exchange, self.config)
         client.create_connection_to_rabbitmq_host()

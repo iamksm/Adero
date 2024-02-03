@@ -3,7 +3,7 @@ from importlib import import_module
 
 class Settings:
     def __init__(self):
-        module = import_module("messaging_utility.config.settings_file")
+        module = import_module("adero.config.settings_file")
         for setting in dir(module):
             if setting.isupper():
                 setting_value = getattr(module, setting)

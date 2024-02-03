@@ -1,11 +1,12 @@
-import json
 import logging
+import time
+from pprint import pformat
 from typing import Callable, Dict
 
 import pika
-from pika.exceptions import ChannelClosed, ConnectionClosed
+from pika.exceptions import AMQPError
 
-from messaging_utility.config.settings import settings
+from adero.utilities import RabbitSecurity, RabbitSerializer
 
 LOGGER = logging.getLogger(__name__)
 
@@ -22,15 +23,14 @@ class Subscriber:
         config: Dict,
         custom_data_processor: Callable,
     ):
-        self.rabbit_user = config.get("RABBIT_USER", settings.RABBIT_USER)
-        self.rabbit_password = config.get("RABBIT_PASSWORD", settings.RABBIT_PASSWORD)
-        self.rabbit_host_ip = config.get("RABBIT_HOST_IP", settings.RABBIT_HOST_IP)
-        self.rabbit_port = config.get("RABBIT_PORT", settings.RABBIT_PORT)
-        self.rabbit_vhost = config.get("RABBIT_VHOST", settings.RABBIT_VHOST)
-        self.connection_timeout = config.get(
-            "RABBIT_CONNECTION_TIMEOUT", settings.RABBIT_CONNECTION_TIMEOUT
-        )
-        self.retries = settings.RABBIT_CONNECTION_CLOSED_RETRY
+        self.rabbit_user = config.get("RABBIT_USER")
+        self.rabbit_password = config.get("RABBIT_PASSWORD")
+        self.rabbit_host_ip = config.get("RABBIT_HOST_IP")
+        self.rabbit_port = int(config.get("RABBIT_PORT", 5672))
+        self.rabbit_vhost = config.get("RABBIT_VHOST")
+        self.connection_timeout = int(config.get("RABBIT_CONNECTION_TIMEOUT", 60 * 5))
+        self.retries = int(config.get("RABBIT_CONNECTION_CLOSED_RETRY", 3))
+        self.security_key = config.get("ENCRYPTION_KEY")
 
         if not all(
             [
@@ -46,6 +46,16 @@ class Subscriber:
 
         self.queue_name = queue_name.upper()
         self.exchange = exchange.upper()
+        self.security = RabbitSecurity(self.security_key)
+        self.serializer = RabbitSerializer()
+
+        # Only create a failed queue if we the current self.queue_name isn't one
+        self.requeue_msg_to_failed_queue = True
+        if "FAILED-" not in self.queue_name:
+            self.requeue_queue = f"FAILED-{self.queue_name}"
+        else:
+            self.requeue_msg_to_failed_queue = False
+            self.requeue_queue = self.queue_name
 
         self._validate_custom_data_processor(custom_data_processor)
 
@@ -84,19 +94,52 @@ class Subscriber:
             routing_key=self.queue_name,
         )
 
-    def callback(self, ch, method, properties, body):
+        if self.requeue_msg_to_failed_queue:
+            # No need re-declare the failed queue we are working on
+            self.channel.queue_declare(
+                queue=self.requeue_queue,
+                durable=True,
+            )
+
+            self.channel.queue_bind(
+                queue=self.requeue_queue,
+                exchange=self.exchange,
+                routing_key=self.requeue_queue,
+            )
+
+    def callback(self, channel, method, properties, body):
         """
         The function processes received messages from the RabbitMQ queue.
         """
-        msg = json.loads(body)
+        decrypted_message = self.security.decipher_message(body)
+        data = self.serializer.decode_data(decrypted_message)
 
-        is_successfully_processed = self.custom_data_processor(msg)
-        if is_successfully_processed:
-            LOGGER.info(f" [x] DONE PROCESSING {msg}")
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+        props = properties.__dict__ if properties else {}
+        msg = {"data": data, "properties": props}
+
+        if self.custom_data_processor(msg):
+            LOGGER.debug(" ********************* DONE PROCESSING ******************** ")
+            LOGGER.debug(pformat(data))
+            LOGGER.debug(" ========================================================== ")
+            channel.basic_ack(delivery_tag=method.delivery_tag)
         else:
-            LOGGER.warning(f" [x] COULD NOT PROCESS {msg}, THIS WILL BE REQUEUED")
-            ch.basic_nack(delivery_tag=method.delivery_tag)
+            if self.requeue_msg_to_failed_queue:
+                channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                channel.basic_publish(
+                    exchange=self.exchange,
+                    routing_key=self.requeue_queue,
+                    body=body,
+                    mandatory=True,
+                    properties=properties,
+                )
+            else:
+                # We are already working with the failed queue,
+                # just return the message to the failed queue
+                channel.basic_reject(delivery_tag=method.delivery_tag, requeue=True)
+
+            LOGGER.error(f" ** PROCESSING FAILED, REQUEUED TO {self.requeue_queue} ** ")
+            LOGGER.error(pformat(data))
+            LOGGER.error(" ========================================================== ")
 
     def consume(self):
         """
@@ -115,15 +158,17 @@ class Subscriber:
             LOGGER.info(" [*] Waiting for messages. To exit press CTRL+C")
 
             self.channel.start_consuming()
-        except (ConnectionClosed, ChannelClosed):
+        except AMQPError:
             LOGGER.warning("CONNECTION CLOSED BY THE BROKER!!!")
 
             if self.retries > 0:
+                LOGGER.debug("WAITING FOR 5 SECONDS TO REBOOT CONSUMER")
+                time.sleep(5)
                 LOGGER.info("RE-INITIALIZING QUEUED MESSAGES CONSUMPTION")
                 self.retries -= 1
                 self.consume()
 
-            LOGGER.error("SHUTTING DOWN RPC SERVER AFTER RESTART ATTEMPTS!!!")
+            LOGGER.critical("SHUTTING DOWN CONSUMER AFTER ALL RESTART ATTEMPTS!!!")
         except KeyboardInterrupt:
             self.channel.stop_consuming()
             self.channel.close()

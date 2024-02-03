@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 import pika
 
-from messaging_utility.config.settings import settings
+from adero.config.settings import settings
 
 LOGGER = logging.getLogger(__name__)
 
