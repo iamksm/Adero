@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-from messaging_utility.rpc.server import (
+from adero.request_response.server import (
     ChannelClosed,
     RPCServer,
     RPCServerException,
@@ -23,7 +23,7 @@ class TestRPCServer(unittest.TestCase):
         self.exchange = "test_exchange"
         self.custom_data_processor = Mock()
 
-    @patch("messaging_utility.rpc.server.pika")
+    @patch("adero.request_response.server.pika")
     def test_create_connection_to_rabbitmq_host(self, mock_pika):
         server = RPCServer(
             self.queue_name, self.exchange, self.config, self.custom_data_processor
@@ -52,14 +52,12 @@ class TestRPCServer(unittest.TestCase):
         self.assertEqual(ch.basic_publish.call_count, 1)
         # Add assertions for the published response
 
-    @patch("messaging_utility.rpc.server.pika.BlockingConnection")
+    @patch("adero.request_response.server.pika.BlockingConnection")
     def test_init_invalid_custom_data_processor(self, mock_blocking_connection):
         with self.assertRaises(RPCServerException):
-            RPCServer(
-                self.queue_name, self.exchange, self.config, "invalid_processor"
-            )
+            RPCServer(self.queue_name, self.exchange, self.config, "invalid_processor")
 
-    @patch("messaging_utility.rpc.server.pika.BlockingConnection")
+    @patch("adero.request_response.server.pika.BlockingConnection")
     def test_init_missing_configs(self, mock_blocking_connection):
         incomplete_config = {
             "RABBIT_USER": "user",
@@ -75,8 +73,8 @@ class TestRPCServer(unittest.TestCase):
                 self.custom_data_processor,
             )
 
-    @patch("messaging_utility.rpc.server.pika.BlockingConnection")
-    @patch("messaging_utility.rpc.server.pika.channel.Channel")
+    @patch("adero.request_response.server.pika.BlockingConnection")
+    @patch("adero.request_response.server.pika.channel.Channel")
     def test_listen(self, mock_channel, mock_blocking_connection):
         server = RPCServer(
             self.queue_name, self.exchange, self.config, self.custom_data_processor
@@ -88,8 +86,8 @@ class TestRPCServer(unittest.TestCase):
 
         self.assertTrue(server.channel.start_consuming.called)
 
-    @patch("messaging_utility.rpc.server.pika.BlockingConnection")
-    @patch("messaging_utility.rpc.server.pika.channel.Channel")
+    @patch("adero.request_response.server.pika.BlockingConnection")
+    @patch("adero.request_response.server.pika.channel.Channel")
     def test_listen_keyboardinterrupt(self, mock_channel, mock_blocking_connection):
         server = RPCServer(
             self.queue_name, self.exchange, self.config, self.custom_data_processor
@@ -103,7 +101,7 @@ class TestRPCServer(unittest.TestCase):
         self.assertTrue(server.channel.close.called)
         self.assertTrue(server.connection.close.called)
 
-    @patch("messaging_utility.rpc.server.pika.BlockingConnection")
+    @patch("adero.request_response.server.pika.BlockingConnection")
     def test_consume_channel_closed_exception(self, mock_blocking_connection):
         server = RPCServer(
             self.queue_name, self.exchange, self.config, self.custom_data_processor

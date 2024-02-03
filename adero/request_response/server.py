@@ -5,7 +5,7 @@ from typing import Callable, Dict
 import pika
 from pika.exceptions import ChannelClosed, ConnectionClosed
 
-from messaging_utility.config.settings import settings
+from adero.config.settings import settings
 
 LOGGER = logging.getLogger(__name__)
 

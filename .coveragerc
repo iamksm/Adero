@@ -1,0 +1,7 @@
+[run]
+source=adero
+omit=adero/config/*
+branch=True
+
+[report]
+show_missing=True

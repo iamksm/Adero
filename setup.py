@@ -1,11 +1,13 @@
+import pathlib
+
 from setuptools import find_packages, setup
 
-with open("README.md") as readme:
-    README = readme.read()
+README = pathlib.Path("README.md").read_text()
 
 setup(
-    name="messaging_utility",
-    version="0.0.1",  # noqa
+    name="adero",
+    version="0.1.1",
+    python_requires=">=3.8",
     description=(
         """
         This Python project demonstrates the usage of RabbitMQ for both
@@ -22,8 +24,5 @@ setup(
             "tests",
         ]
     ),
-    install_requires=[
-        "pika",
-        "ipython",
-    ],
+    install_requires=["pika", "ipython", "cryptography", "msgpack", "pytz"],
 )

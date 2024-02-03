@@ -23,12 +23,12 @@ jobs:
           RABBIT_HOST_IP: 'rabbitmq'
           RABBIT_VHOST: ''
           RABBIT_PORT: 5672
-          RABBIT_CONNECT_TIMEOUT: 21600
+          RABBIT_CONNECT_TIMEOUT: 300
 
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.7", "3.8", "3.9", "3.10", "3.11"]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
     
     steps:
     - name: Check out code
@@ -41,7 +41,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
+        python3 -m pip install --upgrade pip
         pip install tox
     
     - name: Run tests

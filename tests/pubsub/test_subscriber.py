@@ -1,13 +1,9 @@
-import json
 import unittest
 from unittest.mock import Mock, patch
 
-from messaging_utility.pubsub.subscriber import (
-    ChannelClosed,
-    ConnectionClosed,
-    Subscriber,
-    SubscriberException,
-)
+from pika.exceptions import ChannelClosed, ConnectionClosed
+
+from adero.pubsub.subscriber import Subscriber, SubscriberException
 
 
 class TestSubscriber(unittest.TestCase):
@@ -20,6 +16,7 @@ class TestSubscriber(unittest.TestCase):
             "RABBIT_HOST_IP": "localhost",
             "RABBIT_PORT": 5672,
             "RABBIT_VHOST": "",
+            "ENCRYPTION_KEY": b"b_xC4_-c3qo5TYmNhVO5MmtSbhutoLiHaxRomO1dszc=",
         }
         self.custom_data_processor = Mock()
 
@@ -42,7 +39,7 @@ class TestSubscriber(unittest.TestCase):
                 None,
             )
 
-    @patch("messaging_utility.pubsub.subscriber.pika")
+    @patch("adero.pubsub.subscriber.pika")
     def test_create_connection_to_rabbitmq_host(self, mock_pika):
         subscriber = Subscriber(
             self.queue_name,
@@ -50,25 +47,18 @@ class TestSubscriber(unittest.TestCase):
             self.config,
             self.custom_data_processor,
         )
-        # subscriber.create_connection_to_rabbitmq_host()
 
         mock_pika.BlockingConnection.assert_called_once_with(
             mock_pika.URLParameters.return_value
         )
         mock_pika.URLParameters.assert_called_once_with(
-            "amqp://guest:guest@localhost:5672/?blocked_connection_timeout=21600"
+            "amqp://guest:guest@localhost:5672/?blocked_connection_timeout=300"
         )
         subscriber.channel.exchange_declare.assert_called_once_with(
             exchange=self.exchange, exchange_type="direct", durable=True
         )
-        subscriber.channel.queue_declare.assert_called_once_with(
-            queue=self.queue_name, durable=True
-        )
-        subscriber.channel.queue_bind.assert_called_once_with(
-            queue=self.queue_name,
-            exchange=self.exchange,
-            routing_key=self.queue_name,
-        )
+        assert subscriber.channel.queue_declare.call_count == 2
+        assert subscriber.channel.queue_bind.call_count == 2
 
     def test_callback_calls_custom_data_processor(self):
         subscriber = Subscriber(
@@ -77,14 +67,17 @@ class TestSubscriber(unittest.TestCase):
             self.config,
             self.custom_data_processor,
         )
-        msg = json.dumps({"test": "message"})
+        msg = subscriber.serializer.encode_data({"test": "message"})
+        msg = subscriber.security.encrypt_message(msg)
 
         mock_channel = Mock()
         mock_method = Mock()
+        properties = Mock(app_id="1")
 
-        subscriber.callback(mock_channel, mock_method, None, msg)
+        subscriber.callback(mock_channel, mock_method, properties, msg)
 
-        self.custom_data_processor.assert_called_once_with(json.loads(msg))
+        msg = {"data": {"test": "message"}, "properties": properties.__dict__}
+        self.custom_data_processor.assert_called_once_with(msg)
 
     def test_callback_calls_basic_ack_if_processing_successful(self):
         subscriber = Subscriber(
@@ -93,12 +86,14 @@ class TestSubscriber(unittest.TestCase):
             self.config,
             self.custom_data_processor,
         )
-        msg = json.dumps({"test": "message"})
+        msg = subscriber.serializer.encode_data({"test": "message"})
+        encrypted_data = subscriber.security.encrypt_message(msg)
         self.custom_data_processor.return_value = True
         mock_channel = Mock()
         mock_method = Mock()
+        mock_props = Mock(app_id="1")
 
-        subscriber.callback(mock_channel, mock_method, None, msg)
+        subscriber.callback(mock_channel, mock_method, mock_props, encrypted_data)
 
         mock_channel.basic_ack.assert_called_once_with(
             delivery_tag=mock_method.delivery_tag
@@ -111,18 +106,44 @@ class TestSubscriber(unittest.TestCase):
             self.config,
             self.custom_data_processor,
         )
-        msg = json.dumps({"test": "message"})
-        self.custom_data_processor.return_value = False
+        msg = subscriber.serializer.encode_data({"test": "message"})
+        msg = subscriber.security.encrypt_message(msg)
+
+        subscriber.custom_data_processor.return_value = False
         mock_channel = Mock()
         mock_method = Mock()
+        mock_props = Mock(app_id="1")
 
-        subscriber.callback(mock_channel, mock_method, None, msg)
+        subscriber.callback(mock_channel, mock_method, mock_props, msg)
 
         mock_channel.basic_nack.assert_called_once_with(
-            delivery_tag=mock_method.delivery_tag
+            delivery_tag=mock_method.delivery_tag, requeue=False
         )
 
-    @patch("messaging_utility.pubsub.subscriber.pika")
+    def test_callback_calls_basic_reject_if_processing_unsuccessful_on_failed_queue(
+        self,
+    ):
+        subscriber = Subscriber(
+            f"FAILED-{self.queue_name}",
+            self.exchange,
+            self.config,
+            self.custom_data_processor,
+        )
+        msg = subscriber.serializer.encode_data({"test": "message"})
+        msg = subscriber.security.encrypt_message(msg)
+
+        subscriber.custom_data_processor.return_value = False
+        mock_channel = Mock()
+        mock_method = Mock()
+        mock_props = Mock(app_id="1")
+
+        subscriber.callback(mock_channel, mock_method, mock_props, msg)
+
+        mock_channel.basic_reject.assert_called_once_with(
+            delivery_tag=mock_method.delivery_tag, requeue=True
+        )
+
+    @patch("adero.pubsub.subscriber.pika")
     def test_consume_calls_create_connection_to_rabbitmq_host_if_closed(
         self, mock_pika
     ):
@@ -144,7 +165,7 @@ class TestSubscriber(unittest.TestCase):
         assert subscriber.connection == new_connection
         assert subscriber.channel == new_connection.channel.return_value
 
-    @patch("messaging_utility.pubsub.subscriber.pika")
+    @patch("adero.pubsub.subscriber.pika")
     def test_consume_calls_start_consuming(self, mock_pika):
         subscriber = Subscriber(
             self.queue_name,
@@ -162,7 +183,7 @@ class TestSubscriber(unittest.TestCase):
         )
         subscriber.channel.start_consuming.assert_called_once()
 
-    @patch("messaging_utility.pubsub.subscriber.pika.BlockingConnection")
+    @patch("adero.pubsub.subscriber.pika.BlockingConnection")
     def test_consume_connection_closed_exception(self, mock_blocking_connection):
         client = Subscriber(
             self.queue_name, self.exchange, self.config, self.custom_data_processor
@@ -178,7 +199,7 @@ class TestSubscriber(unittest.TestCase):
 
         assert client.retries == 0
 
-    @patch("messaging_utility.pubsub.subscriber.pika.BlockingConnection")
+    @patch("adero.pubsub.subscriber.pika.BlockingConnection")
     def test_consume_channel_closed_exception(self, mock_blocking_connection):
         client = Subscriber(
             self.queue_name, self.exchange, self.config, self.custom_data_processor
@@ -194,8 +215,8 @@ class TestSubscriber(unittest.TestCase):
 
         assert client.retries == 0
 
-    @patch("messaging_utility.pubsub.subscriber.pika.BlockingConnection")
-    @patch("messaging_utility.pubsub.subscriber.SubscriberException")
+    @patch("adero.pubsub.subscriber.pika.BlockingConnection")
+    @patch("adero.pubsub.subscriber.SubscriberException")
     def test_consume_keyboard_interrupt(
         self, mock_subscriber_exception, mock_blocking_connection
     ):
@@ -213,3 +234,15 @@ class TestSubscriber(unittest.TestCase):
         self.assertTrue(client.channel.stop_consuming.called)
         self.assertTrue(client.channel.close.called)
         self.assertTrue(client.connection.close.called)
+
+    @patch("adero.pubsub.subscriber.pika")
+    def test_subscriber_initialization_with_failed_queue(self, mock_pika):
+        subscriber = Subscriber(
+            f"FAILED-{self.queue_name}",
+            self.exchange,
+            self.config,
+            self.custom_data_processor,
+        )
+
+        self.assertFalse(subscriber.requeue_msg_to_failed_queue)
+        self.assertEqual(subscriber.requeue_queue, f"FAILED-{self.queue_name}")
